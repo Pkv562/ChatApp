@@ -1,7 +1,7 @@
 # ChatApp
 MernChatApp
 
-to run this app
+to run this app in the terminal
 
 1. go to the api folder and run nodemon index.js
 2. go to the client folder and run yarn dev
