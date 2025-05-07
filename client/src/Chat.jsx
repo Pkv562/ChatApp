@@ -1,3 +1,4 @@
+// File: Chat.jsx
 import { useEffect, useState } from "react";
 import axios from "axios";
 import {
@@ -109,13 +110,12 @@ export default function ChatComponent() {
                         token: videoToken,
                     };
                     console.log("Video config:", videoConfig);
-                    videoClient = StreamVideoClient.getOrCreateInstance(videoConfig);
-                    console.log("Connecting StreamVideo user...");
-                    await videoClient.connectUser();
-                    console.log("Stream Video connected");
+                    videoClient = new StreamVideoClient(videoConfig);
+                    console.log("StreamVideoClient created");
                     setVideoClient(videoClient);
                     cleanupVideoClient = () => videoClient.disconnectUser();
                 } catch (err) {
+                    console.error("Stream Video error details:", err);
                     throw new Error(`Failed to initialize Stream Video: ${err.message || JSON.stringify(err)}`);
                 }
 
