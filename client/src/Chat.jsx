@@ -1,201 +1,287 @@
-import { useEffect, useRef, useState } from "react"
-import Avatar from "./avatar";
-import Logo from "./logo";
-import axios from 'axios';
-import { uniqBy } from 'lodash'; 
+import { useEffect, useState } from "react";
+import axios from "axios";
+import {
+    Chat,
+    Channel,
+    ChannelList,
+    Window,
+    ChannelHeader,
+    MessageList,
+    MessageInput,
+    Thread,
+} from "stream-chat-react";
+import { StreamChat } from "stream-chat";
+import { StreamVideo, StreamVideoClient } from "@stream-io/video-react-sdk";
+import { useNavigate } from "react-router-dom";
+import Avatar from "./Avatar";
+import Logo from "./Logo";
 import Contact from "./Contact";
+import { LogOut, Video } from "lucide-react";
+import "stream-chat-react/dist/css/v2/index.css";
 
-export default function Chat() {
-    const [ws, setWs] = useState(null);
-    const [onlinePeople, setOnlinePeople] = useState({});
-    const [offlinePeople, setOfflinePeople] = useState({}); 
-    const [selectedUserId, setSelectedUserId] = useState(null);
-    const [newMessageText, setNewMessageText] = useState('');
-    const [messages, setMessages] = useState([]);
+export default function ChatComponent() {
+    const [chatClient, setChatClient] = useState(null);
+    const [videoClient, setVideoClient] = useState(null);
     const [myUserId, setMyUserId] = useState(null);
     const [username, setUsername] = useState(null);
     const [loggedIn, setLoggedIn] = useState(false);
-    const messagesEndRef = useRef(null);
+    const [selectedUserId, setSelectedUserId] = useState(null);
+    const [onlinePeople, setOnlinePeople] = useState({});
+    const [offlinePeople, setOfflinePeople] = useState({});
+    const [error, setError] = useState("");
+    const navigate = useNavigate();
 
     useEffect(() => {
-        axios.get('/profile').then(res => {
-            setMyUserId(res.data.id);
-            setUsername(res.data.username);
-            setLoggedIn(true);
-            connectToWs();
-        }).catch(err => {
-            setLoggedIn(false);
-            console.log("Not logged in");
-        });
-    }, []);
+        let cleanupVideoClient = null;
 
-    function connectToWs() {
-        const socket = new WebSocket("ws://localhost:4000");
-        setWs(socket);
+        async function initialize() {
+            try {
+                console.log("Initializing Chat.jsx...");
 
-        socket.addEventListener('message', handleMessage);
-        socket.addEventListener('close', () =>{ 
-            if (loggedIn) {
-                setTimeout(() => {
-                    console.log('Disconnected. Trying to reconnect');
-                    connectToWs()
-                }, 1000)
-            }
-        });
-      
-        return () => {
-          socket.removeEventListener('message', handleMessage);
-          socket.close(); 
-        };
-    }
+                // Step 1: Fetch user profile
+                let profileRes;
+                try {
+                    console.log("Fetching /api/profile...");
+                    console.log("Request URL:", axios.defaults.baseURL + "/api/profile");
+                    console.log("Cookies sent with request:", document.cookie);
+                    profileRes = await axios.get("/api/profile", { withCredentials: true });
+                    console.log("Profile response:", profileRes);
+                } catch (err) {
+                    const errorDetails = err.response
+                        ? `Status: ${err.response.status}, Data: ${JSON.stringify(err.response.data)}`
+                        : `No response: ${err.message}`;
+                    throw new Error(`Failed to fetch profile: ${errorDetails}`);
+                }
 
-    useEffect(() => {
-        scrollToBottom();
-    }, [messages]);
+                if (!profileRes?.data?.id || !profileRes?.data?.username) {
+                    throw new Error("Invalid profile data: id or username missing");
+                }
+                console.log("Profile data:", profileRes.data);
+                setMyUserId(profileRes.data.id);
+                setUsername(profileRes.data.username);
+                setLoggedIn(true);
 
-    function scrollToBottom() {
-        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
+                // Step 2: Fetch Stream tokens
+                let tokenRes;
+                try {
+                    console.log("Fetching /api/token...");
+                    tokenRes = await axios.post("/api/token", {}, { withCredentials: true });
+                    console.log("Token response:", tokenRes);
+                } catch (err) {
+                    const errorDetails = err.response
+                        ? `Status: ${err.response.status}, Data: ${JSON.stringify(err.response.data)}`
+                        : `No response: ${err.message}`;
+                    throw new Error(`Failed to fetch tokens: ${errorDetails}`);
+                }
 
-    function showOnlinePeople(peopleArray) {
-        const people = {};
-        peopleArray.forEach(({userId, username}) => {
-            if (userId && username) { 
-                people[userId] = username;
-            }
-        });
-        setOnlinePeople(people);
-    }
+                const { chatToken, videoToken } = tokenRes.data || {};
+                if (!chatToken || !videoToken) {
+                    throw new Error("Invalid token data: chatToken or videoToken missing");
+                }
+                console.log("Tokens:", { chatToken, videoToken });
 
-    function handleMessage(ev) {
-        const messageData = JSON.parse(ev.data);
-        if('online' in messageData) {
-            showOnlinePeople(messageData.online);
-            if (messageData.you) {
-                setMyUserId(messageData.you);  
-            }
-        } else if(messageData.sender) {
-            setMessages(prev => uniqBy([...prev, {
-                text: messageData.text || '',
-                sender: messageData.sender,
-                recipient: messageData.recipient,
-                _id: messageData._id,
-                file: messageData.file || null
-            }], '_id'));
+                // Step 3: Initialize Stream Chat
+                let chatClient;
+                try {
+                    console.log("Initializing StreamChat with API key:", import.meta.env.VITE_STREAM_API_KEY);
+                    chatClient = StreamChat.getInstance(import.meta.env.VITE_STREAM_API_KEY);
+                    console.log("Connecting StreamChat user...");
+                    await chatClient.connectUser(
+                        {
+                            id: profileRes.data.id,
+                            name: profileRes.data.username,
+                        },
+                        chatToken
+                    );
+                    console.log("Stream Chat connected");
+                    setChatClient(chatClient);
+                } catch (err) {
+                    throw new Error(`Failed to initialize Stream Chat: ${err.message || JSON.stringify(err)}`);
+                }
 
-            if (messageData.sender === selectedUserId || messageData.recipient === selectedUserId) {
-                scrollToBottom();
-            }
-        }
-    }
+                // Step 4: Initialize Stream Video
+                let videoClient;
+                try {
+                    console.log("Initializing StreamVideoClient...");
+                    const videoConfig = {
+                        apiKey: import.meta.env.VITE_STREAM_API_KEY,
+                        user: { id: profileRes.data.id, name: profileRes.data.username },
+                        token: videoToken,
+                    };
+                    console.log("Video config:", videoConfig);
+                    videoClient = StreamVideoClient.getOrCreateInstance(videoConfig);
+                    console.log("Connecting StreamVideo user...");
+                    await videoClient.connectUser();
+                    console.log("Stream Video connected");
+                    setVideoClient(videoClient);
+                    cleanupVideoClient = () => videoClient.disconnectUser();
+                } catch (err) {
+                    throw new Error(`Failed to initialize Stream Video: ${err.message || JSON.stringify(err)}`);
+                }
 
-    function fetchMessages(userId) {
-        if(userId && loggedIn) {
-            axios.get('/messages/'+userId).then(res => {
-                setMessages(prev => {
-                    return uniqBy([...prev, ...res.data], '_id');
+                // Step 5: Set up event listeners
+                console.log("Setting up event listeners...");
+                chatClient.on("user.presence.changed", (event) => {
+                    const user = event.user;
+                    if (user && user.id !== myUserId) {
+                        setOnlinePeople((prev) => ({
+                            ...prev,
+                            [user.id]: user.name || "",
+                        }));
+                    }
                 });
-            });
+
+                chatClient.on("notification.message_new", async (event) => {
+                    if (event.message?.type === "call_invitation") {
+                        const callId = event.message.text;
+                        const initiatorId = event.message.user.id;
+                        const initiatorUsername = onlinePeople[initiatorId] || offlinePeople[initiatorId]?.username;
+                        if (window.confirm(`Incoming call from ${initiatorUsername}. Accept?`)) {
+                            navigate(`/call/${callId}`, {
+                                state: {
+                                    recipientId: initiatorId,
+                                    recipientUsername: initiatorUsername,
+                                    initiator: false,
+                                },
+                            });
+                        }
+                    }
+                });
+            } catch (err) {
+                console.error("Initialization failed:", err);
+                console.error("Error details:", JSON.stringify(err, null, 2));
+                setError(`Failed to initialize: ${err.message || 'Unknown error'}`);
+                setLoggedIn(false);
+                setChatClient(null);
+                setVideoClient(null);
+            }
         }
-    }
 
-    function sendMessage(ev, file = null) {
-        if(ev) ev.preventDefault();
-        
-        if ((!newMessageText.trim() && !file) || !selectedUserId) return;
+        initialize();
 
-        const optimisticMsg = {
-            text: newMessageText, 
-            sender: myUserId,
-            recipient: selectedUserId,
-            _id: Date.now(),
-            file: file ? file.name : null,
+        return () => {
+            if (chatClient) {
+                chatClient.disconnectUser();
+                console.log("Stream Chat disconnected");
+            }
+            if (cleanupVideoClient) {
+                cleanupVideoClient();
+                console.log("Stream Video disconnected");
+            }
         };
-
-        setMessages(prev => uniqBy([...prev, optimisticMsg], '_id'));
-        setNewMessageText('');
-
-        ws.send(JSON.stringify({
-            recipient: selectedUserId,
-            text: newMessageText,
-            file,
-        }));
-    }
-
-    useEffect(() => {
-        if (selectedUserId) {
-            fetchMessages(selectedUserId);
-        }
-    }, [selectedUserId, loggedIn]);
+    }, []);
 
     useEffect(() => {
         if (loggedIn) {
-            axios.get('/people').then(res => {
+            axios.get("/api/people").then((res) => {
                 const offlinePeopleArray = res.data
-                .filter(p => p._id !== myUserId) 
-                .filter(p => !Object.keys(onlinePeople).includes(p._id));
-                const offlinePeople = {};
-                    offlinePeopleArray.forEach(p => {
-                        offlinePeople[p._id] = p;
-                    });
-                    setOfflinePeople(offlinePeople);
-            })
+                    .filter((p) => p._id !== myUserId)
+                    .filter((p) => !Object.keys(onlinePeople).includes(p._id));
+                const offlinePeople = offlinePeopleArray.reduce((acc, p) => {
+                    acc[p._id] = { username: p.username };
+                    return acc;
+                }, {});
+                setOfflinePeople(offlinePeople);
+            }).catch((err) => {
+                console.error("Failed to fetch people:", err);
+            });
         }
-    }, [onlinePeople, myUserId, loggedIn]) 
+    }, [onlinePeople, myUserId, loggedIn]);
 
     function logout() {
-        axios.post('/logout').then(() => {
-            if (ws) {
-                ws.close();
+        axios
+            .post("/api/logout")
+            .then(() => {
+                if (chatClient) chatClient.disconnectUser();
+                if (videoClient) videoClient.disconnectUser();
+                setMyUserId(null);
+                setUsername(null);
+                setSelectedUserId(null);
+                setOnlinePeople({});
+                setOfflinePeople({});
+                setLoggedIn(false);
+                setChatClient(null);
+                setVideoClient(null);
+                navigate("/login");
+            })
+            .catch((err) => {
+                console.error("Logout failed:", err);
+            });
+    }
+
+    const CustomChannelHeader = () => {
+        const handleVideoCall = async () => {
+            if (!selectedUserId || !videoClient || !chatClient) {
+                alert("Please select a contact and ensure clients are initialized.");
+                return;
             }
 
-            setMyUserId(null);
-            setUsername(null);
-            setMessages([]);
-            setSelectedUserId(null);
-            setOnlinePeople({});
-            setOfflinePeople({});
+            try {
+                const callId = require("crypto").randomUUID();
+                const call = videoClient.call("default", callId);
+                await call.getOrCreate({
+                    ring: true,
+                    data: {
+                        members: [
+                            { user_id: myUserId, role: "admin" },
+                            { user_id: selectedUserId },
+                        ],
+                    },
+                });
 
-            setLoggedIn(false);
-    
-        }).catch(err => {
-            console.error("Logout failed:", err);
-        });
-    }
+                // Notify recipient via Stream Chat
+                const channel = chatClient.channel("messaging", {
+                    members: [myUserId, selectedUserId],
+                });
+                await channel.create();
+                await channel.sendMessage({
+                    text: callId,
+                    type: "call_invitation",
+                });
 
-    function sendFile(ev) {
-        const file = ev.target.files[0];
-        if (!file) return;
-      
-        const reader = new FileReader();
-        reader.onload = () => {
-          const fileData = {
-            name: file.name,
-            data: reader.result, 
-            type: file.type,
-            size: file.size
-          };
-          
-          sendMessage(null, fileData);
+                navigate(`/call/${callId}`, {
+                    state: {
+                        recipientId: selectedUserId,
+                        recipientUsername: onlinePeople[selectedUserId] || offlinePeople[selectedUserId]?.username,
+                        initiator: true,
+                    },
+                });
+            } catch (error) {
+                console.error("Failed to initiate video call:", error);
+                alert("Failed to start video call. Please try again.");
+            }
         };
-        reader.readAsDataURL(file);
-    }
 
-    const filteredMessages = messages.filter(m => 
-        (m.sender === selectedUserId || m.recipient === selectedUserId) &&
-        (m.sender === myUserId || m.recipient === myUserId)
-    );
-    
-    const messagesWithoutDupes = uniqBy(filteredMessages, '_id');
-
-    if (!loggedIn) {
         return (
-            <div className="flex h-screen items-center justify-center bg-blue-50">
+            <div className="flex items-center justify-between p-4 border-b border-zinc-700">
+                <ChannelHeader />
+                {selectedUserId && (
+                    <button
+                        onClick={handleVideoCall}
+                        className="text-zinc-400 p-2 rounded-lg hover:bg-zinc-700 hover:text-white transition-colors"
+                        title="Start Video Call"
+                    >
+                        <Video className="w-5 h-5" />
+                    </button>
+                )}
+            </div>
+        );
+    };
+
+    const filters = { type: "messaging", members: { $in: [myUserId?.toString()] } };
+    const sort = [{ last_message_at: -1 }];
+
+    if (!loggedIn || !chatClient) {
+        return (
+            <div className="flex h-screen items-center justify-center bg-zinc-900">
                 <div className="text-center">
-                    <Logo />
-                    <h1 className="text-xl mb-4">You are logged out</h1>
-                    <p className="mb-4">Please login to continue chatting</p>
-                    <a href="/login" className="bg-blue-500 text-white py-2 px-4 rounded">
+                    <h1 className="text-xl text-white mb-4 mt-8">You are logged out</h1>
+                    {error && <p className="text-red-400 mb-4">{error}</p>}
+                    <p className="text-zinc-400 mb-6">Please login to continue chatting</p>
+                    <a
+                        href="/login"
+                        className="bg-blue-500 text-white py-3 px-6 rounded-lg hover:bg-blue-600 transition-colors"
+                    >
                         Go to Login
                     </a>
                 </div>
@@ -204,103 +290,106 @@ export default function Chat() {
     }
 
     return (
-        <div className="flex h-screen">
-            <div className="bg-white-100 w-1/3 overflow-y-auto flex flex-col">
-            <div className="flex-grow">
-            <Logo />
-                {Object.keys(onlinePeople).map(userId => (
-                    <Contact 
-                    key={userId}
-                    id={userId} 
-                    username={onlinePeople[userId]} 
-                    online={true}
-                    onClick={() => setSelectedUserId(userId)}
-                    selected={userId === selectedUserId} 
-                    />
-                ))}
-                {Object.keys(offlinePeople).map(userId => (
-                    <Contact 
-                    key={userId}
-                    id={userId} 
-                    username={offlinePeople[userId].username}
-                    online={false}
-                    onClick={() => setSelectedUserId(userId)}
-                    selected={userId === selectedUserId} 
-                    />
-                ))} 
-            </div>
-            <div className="p-2 text-center flex items-center justify-center">
-                <span className="mr-2 text-sm text-grey-600 flex items-center">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 mr-1">
-                <path fillRule="evenodd" d="M7.5 6a4.5 4.5 0 1 1 9 0 4.5 4.5 0 0 1-9 0ZM3.751 20.105a8.25 8.25 0 0 1 16.498 0 .75.75 0 0 1-.437.695A18.683 18.683 0 0 1 12 22.5c-2.786 0-5.433-.608-7.812-1.7a.75.75 0 0 1-.437-.695Z" clipRule="evenodd" />
-                </svg>
-                    {username}</span>
-                <button 
-                onClick={logout}
-                className="text-sm bg-blue-100 border rounded-sm py-1 px-2 text-gray-500">LogOut</button>
-            </div>
-            </div>
-            <div className="flex flex-col bg-blue-50 w-2/3 p-2">
-                {!selectedUserId && (
-                    <div className="flex-grow flex items-center justify-center">
-                        <div className="text-gray-300">&larr; Select a person from the sidebar</div>
-                    </div>
-                )}
-                
-                {!!selectedUserId && (
-                    <>
-                        <div className="flex-grow overflow-y-auto mb-2">
-                            <div className="h-full">
-                            {messagesWithoutDupes.map((message, i) => (
-                                    <div key={i} className={(message.sender === myUserId) ? 'text-right' : 'text-left'}>
-                                        <div className={
-                                            "text-left inline-block p-2 my-2 rounded-md text-sm " + 
-                                            (message.sender === myUserId ? 'bg-blue-500 text-white' : 'bg-white text-gray-500')
-                                        }>
-                                            {message.text}
-                                            {message.file && (
-                                                <div className="flex items-center gap-1">
-                                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
-                                                    <path fillRule="evenodd" d="M18.97 3.659a2.25 2.25 0 0 0-3.182 0l-10.94 10.94a3.75 3.75 0 1 0 5.304 5.303l7.693-7.693a.75.75 0 0 1 1.06 1.06l-7.693 7.693a5.25 5.25 0 1 1-7.424-7.424l10.939-10.94a3.75 3.75 0 1 1 5.303 5.304L9.097 18.835l-.008.008-.007.007-.002.002-.003.002A2.25 2.25 0 0 1 5.91 15.66l7.81-7.81a.75.75 0 0 1 1.061 1.06l-7.81 7.81a.75.75 0 0 0 1.054 1.068L18.97 6.84a2.25 2.25 0 0 0 0-3.182Z" clipRule="evenodd" />
-                                                    </svg>
-                                                    <a target="_blank" className="underline" href={axios.defaults.baseURL + '/uploads/'+message.file}>
-                                                        {message.file}
-                                                    </a>
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                ))}
-                                <div ref={messagesEndRef} />
+        <StreamVideo client={videoClient}>
+            <Chat client={chatClient} theme="messaging dark">
+                <div className="flex h-screen w-full overflow-x-hidden">
+                    <div className="bg-zinc-900 border-r border-zinc-700 w-80 flex flex-col fixed top-0 left-0 h-full">
+                        <div className="flex-grow overflow-y-auto scrollbar-hidden">
+                            <Logo />
+                            <div className="border-b mx-3 border-zinc-700" />
+                            {Object.keys(onlinePeople).map((userId) => (
+                                <Contact
+                                    key={userId}
+                                    id={userId}
+                                    username={onlinePeople[userId]}
+                                    online={true}
+                                    onClick={() => {
+                                        setSelectedUserId(userId);
+                                        chatClient
+                                            .queryChannels({
+                                                type: "messaging",
+                                                members: { $eq: [myUserId.toString(), userId] },
+                                            })
+                                            .then((channels) => {
+                                                if (channels.length === 0) {
+                                                    chatClient
+                                                        .channel("messaging", {
+                                                            members: [myUserId.toString(), userId],
+                                                        })
+                                                        .create();
+                                                }
+                                            });
+                                    }}
+                                    selected={userId === selectedUserId}
+                                />
+                            ))}
+                            {Object.keys(offlinePeople).map((userId) => (
+                                <Contact
+                                    key={userId}
+                                    id={userId}
+                                    username={offlinePeople[userId].username}
+                                    online={false}
+                                    onClick={() => {
+                                        setSelectedUserId(userId);
+                                        chatClient
+                                            .queryChannels({
+                                                type: "messaging",
+                                                members: { $eq: [myUserId.toString(), userId] },
+                                            })
+                                            .then((channels) => {
+                                                if (channels.length === 0) {
+                                                    chatClient
+                                                        .channel("messaging", {
+                                                            members: [myUserId.toString(), userId],
+                                                        })
+                                                        .create();
+                                                }
+                                            });
+                                    }}
+                                    selected={userId === selectedUserId}
+                                />
+                            ))}
+                        </div>
+                        <div className="flex items-center justify-between bg-zinc-800 rounded-lg m-4 p-4">
+                            <span className="flex items-center text-sm text-zinc-400">
+                                <Avatar userId={myUserId} username={username} className="flex-shrink-0 w-8 h-8 mr-2" />
+                                <div className="mr-4"></div>
+                                {username}
+                            </span>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={logout}
+                                    className="text-zinc-400 p-2 rounded-lg hover:bg-zinc-700 hover:text-white transition-colors"
+                                >
+                                    <LogOut className="w-5 h-5" />
+                                </button>
                             </div>
                         </div>
-                        
-                        <form className="flex gap-2" onSubmit={sendMessage}>
-                            <input 
-                                type="text" 
-                                value={newMessageText}
-                                onChange={ev => setNewMessageText(ev.target.value)}
-                                placeholder="Type your message" 
-                                className="bg-white flex-grow border rounded-sm p-2"
-                            />
-                            <label type="button" className="bg-blue-300 p-2 text-gray-500 rounded-sm border border border-blue-200 cursor-pointer">
-                            <input type="file" className="hidden" onChange={sendFile}/>
-                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="size-6">
-                            <path fillRule="evenodd" d="M18.97 3.659a2.25 2.25 0 0 0-3.182 0l-10.94 10.94a3.75 3.75 0 1 0 5.304 5.303l7.693-7.693a.75.75 0 0 1 1.06 1.06l-7.693 7.693a5.25 5.25 0 1 1-7.424-7.424l10.939-10.94a3.75 3.75 0 1 1 5.303 5.304L9.097 18.835l-.008.008-.007.007-.002.002-.003.002A2.25 2.25 0 0 1 5.91 15.66l7.81-7.81a.75.75 0 0 1 1.061 1.06l-7.81 7.81a.75.75 0 0 0 1.054 1.068L18.97 6.84a2.25 2.25 0 0 0 0-3.182Z" clipRule="evenodd" />
-                            </svg>
-                            </label>
-                            <button 
-                                type="submit" 
-                                className="bg-blue-500 p-2 text-white rounded-sm"
-                            >
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 12 3.269 3.125A59.769 59.769 0 0 1 21.485 12 59.768 59.768 0 0 1 3.27 20.875L5.999 12Zm0 0h7.5" />
-                                </svg>
-                            </button>
-                        </form>
-                    </>
-                )}
-            </div>
-        </div>
-    )
+                    </div>
+                    <div className="flex flex-col bg-zinc-900 flex-1 ml-80 p-6 overflow-x-hidden">
+                        <ChannelList
+                            filters={filters}
+                            sort={sort}
+                            showChannelSearch={false}
+                            additionalChannelListProps={{
+                                onChannelSelect: (channel) => {
+                                    const members = Object.keys(channel.state.members);
+                                    const otherMember = members.find((m) => m !== myUserId.toString());
+                                    setSelectedUserId(otherMember || null);
+                                },
+                            }}
+                        />
+                        <Channel>
+                            <Window>
+                                <CustomChannelHeader />
+                                <MessageList />
+                                <MessageInput />
+                            </Window>
+                            <Thread />
+                        </Channel>
+                    </div>
+                </div>
+            </Chat>
+        </StreamVideo>
+    );
 }
