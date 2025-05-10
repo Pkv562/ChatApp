@@ -1,419 +1,507 @@
-// Importing all the necessary packages
-const express = require('express');         // For creating the server
-const mongoose = require('mongoose');       // For MongoDB interactions
-const dotenv = require('dotenv');           // For environment variables
-const User = require('./models/User.js');   // User model/schema
-const jwt = require('jsonwebtoken');        // For authentication tokens
-const cors = require('cors');               // For cross-origin requests
-const cookieParser = require('cookie-parser'); // For handling cookies
-const Message = require('./models/message.js'); // Message model/schema
-const bycrpt = require('bcryptjs');         // For password hashing
-const ws = require('ws');                   // WebSocket for real-time features
-const fs = require('fs');                   // File system for handling uploads
-const path = require('path');               // For handling file paths
-const buffer = require('buffer').Buffer;    // For handling binary data
+const express = require('express');
+const mongoose = require('mongoose');
+const dotenv = require('dotenv');
+const User = require('./models/User.js');
+const jwt = require('jsonwebtoken');
+const cors = require('cors');
+const cookieParser = require('cookie-parser');
+const bcrypt = require('bcryptjs');
+const { StreamChat } = require('stream-chat');
+const http = require('http');
+const { Server } = require('socket.io');
 
-// Load environment variables from .env file
 dotenv.config();
 
-// Connect to MongoDB database
+// Connect to MongoDB
 mongoose.connect(process.env.MONGO_URL)
-  .then(() => {
-    console.log("Connected to MongoDB");
-  })
-  .catch((err) => {
-    console.error("Failed to connect to MongoDB", err);
-  });
+  .then(() => console.log("Connected to MongoDB"))
+  .catch((err) => console.error("Failed to connect to MongoDB", err));
 
-// Get JWT secret and create salt for password hashing
+// Initialize Stream Chat client for text messaging
+const streamChatClient = StreamChat.getInstance(process.env.STREAM_API_KEY, process.env.STREAM_API_SECRET);
+
 const jwtSecret = process.env.JWT_SECRET;
-const bycrptSalt = bycrpt.genSaltSync(10);
+const bcryptSalt = bcrypt.genSaltSync(10);
 
-// Create Express app
 const app = express();
-
-// Middleware setup
-app.use('/uploads', express.static(__dirname + '/uploads')) // Serve uploaded files
-app.use(express.json()); // Parse JSON bodies
-app.use(cookieParser())  // Parse cookies
-app.use(cors({           // Configure CORS
-    origin: process.env.CLIENT_URL,
+app.use(express.json());
+app.use(cookieParser());
+app.use(cors({
+    origin: process.env.CLIENT_URL || 'http://localhost:5173',
     credentials: true,
 }));
+app.use('/api', express.static('public'));
 
-// Simple test endpoint to check if server is running
-app.get('/test', (req, res) => {
-    res.json({'test ok': true});
+// Create HTTP server and Socket.io instance
+const server = http.createServer(app);
+const io = new Server(server, {
+    cors: {
+        origin: process.env.CLIENT_URL || 'http://localhost:5173',
+        methods: ["GET", "POST"],
+        credentials: true
+    }
 });
 
+// Store active users and their socket connections
+const activeCalls = new Map();
+const activeUsers = new Map();
 
-// Function: getUserDataFromRequest
-// Description: Retrieves user data from the request by verifying the JWT token in cookies.
-// Returns: a Promise that resolves with userData if token and user are valid.
-async function getUserDataFromRequest(req) {
-  return new Promise((resolve, reject) => {
-    // 1. Try to extract the JWT token from cookies (if available)
-    const token = req.cookies?.token;
+io.on('connection', (socket) => {
+    console.log('New socket connection:', socket.id);
+    let currentUserId = null;
 
-    // 2. If token is found, attempt to verify it
-    if (token) {
-      jwt.verify(token, jwtSecret, {}, (err, userData) => {
-        // 3. If token is invalid or expired, reject with an error message
-        if (err) {
-          reject("Invalid token");
-          return;
+    socket.on('register', async (userId) => {
+        console.log(`User ${userId} registering with socket ${socket.id}`);
+        currentUserId = userId;
+
+        // Clean up old sockets for this user
+        if (activeUsers.has(userId)) {
+            const oldSockets = activeUsers.get(userId);
+            oldSockets.forEach((socketId) => {
+                if (socketId !== socket.id) {
+                    const oldSocket = io.sockets.sockets.get(socketId);
+                    if (oldSocket) {
+                        oldSocket.disconnect(true);
+                        console.log(`Disconnected old socket ${socketId} for user ${userId}`);
+                    }
+                }
+            });
         }
 
-        // 4. If token is valid, look up the user in the database using the ID from the token
-        User.findById(userData.userId)
-          .then(user => {
-            // 5. If user does not exist in the database, reject with error
-            if (!user) {
-              reject("User not found");
-              return;
-            }
-
-            // 6. If user exists and token is valid, resolve with the decoded userData
-            resolve(userData);
-          })
-          .catch(err => {
-            // 7. If a DB error occurs during lookup, reject with error
-            reject("Error finding user");
-          });
-      });
-    } else {
-      // 8. If no token is found in cookies, reject with error
-      reject("No token found");
-    }
-  });
-}
-
-// Get messages between current user and another user
-app.get('/messages/:userId', async (req, res) => {
-  const {userId} = req.params;
-  
-  try {
-    const userData = await getUserDataFromRequest(req);
-    const ourUserId = userData.userId;
-    
-    // Find messages where either sender or recipient is either user
-    const messages = await Message.find({
-      sender: {$in:[userId, ourUserId]},
-      recipient: {$in:[userId, ourUserId]},
-    }).sort({createdAt: 1});
-
-    res.json(messages);
-  } catch (err) {
-    res.status(401).json({error: err});
-  }
-});
-
-// Get list of all users (just IDs and usernames)
-app.get('/people', async (req, res) => {
-  const users = await User.find({}, {'_id':1, username:1});
-  res.json(users);
-})
-
-// Route: GET /profile
-// Description: Returns the user's profile data (id and username) if a valid JWT token is present in cookies.
-app.get('/profile', (req, res) => {
-  // 1. Extract the token from cookies (optional chaining avoids errors if cookies are undefined)
-  const token = req.cookies?.token;
-
-  // 2. Check if token exists
-  if (token) {
-      // 3. Verify token using JWT secret
-      jwt.verify(token, jwtSecret, {}, (err, userData) => {
-          // 4. If verification fails, return unauthorized
-          if (err) {
-              return res.status(401).json("Invalid token");
-          }
-
-          // 5. If token is valid, look up the user in the database using the ID from the token
-          User.findById(userData.userId)
-              .then(user => {
-                  // 6. If no user is found, return unauthorized
-                  if (!user) {
-                      return res.status(401).json("User not found");
-                  }
-
-                  // 7. If user exists, return basic profile info
-                  res.json({
-                      id: user._id,
-                      username: user.username
-                  });
-              })
-              .catch(err => {
-                  // 8. If database error occurs, return server error
-                  res.status(500).json("Error finding user");
-              });
-      });
-  } else {
-      // 9. If no token in cookies, return unauthorized
-      res.status(401).json("No token found");
-  }
-});
-
-
-// Route: POST /login
-// Description: Authenticates a user and issues a JWT token via cookie if credentials are valid.
-app.post('/login', async (req, res) => {
-  // 1. Extract username and password from request body
-  const { username, password } = req.body;
-
-  // 2. Search for the user in the database by username
-  const foundUser = await User.findOne({ username });
-
-  // 3. If the user exists, proceed to password verification
-  if (foundUser) {
-    // 4. Compare the entered password with the hashed password stored in the database
-    const passOK = bycrpt.compareSync(password, foundUser.password);
-
-    // 5. If the password matches, create a JWT token
-    if (passOK) {
-      jwt.sign(
-        { userId: foundUser._id }, // payload 
-        jwtSecret,                 // secret key
-        {},                        // options 
-        (err, token) => {
-          // 6. If token creation fails, throw error
-          if (err) throw err;
-
-          // 7. If successful, send the token as a secure HTTP-only cookie and return user data
-          res.cookie('token', token, {
-            httpOnly: true,     // prevents JS access on the client side
-            sameSite: 'none',   // required for cross-site cookie usage 
-            secure: true,       // ensures cookie is only sent over HTTPS
-          }).status(200).json({
-            id: foundUser._id,
-            username: foundUser.username,
-          });
+        // Store new socket
+        if (!activeUsers.has(userId)) {
+            activeUsers.set(userId, new Set());
         }
-      );
-    } else {
-      // 8. If password does not match, return unauthorized
-      res.status(401).json("Incorrect password");
-    }
+        activeUsers.get(userId).add(socket.id);
+        console.log(`Active sockets for user ${userId}:`, [...activeUsers.get(userId)]);
 
-  } else {
-    // 9. If no user is found with the given username, return not found
-    res.status(404).json("User not found");
-  }
-});
-
-
-// Logout endpoint - clears the token cookie
-app.post('/logout', (req, res) => {
-  res.cookie('token', '', {
-    httpOnly: true,
-    sameSite: 'none',
-    secure: true,
-  }).json('ok');
-})
-
-// Route: POST /register
-// Description: Handles user registration by saving a new user to the database with a hashed password.
-// Returns: After successful creation, it issues a JWT token and sets it as an HTTP-only cookie.
-
-app.post('/register', async (req, res) => {
-  // 1. Extract username and password from the request body
-  const { username, password } = req.body;
-
-  try {
-    // 2. Hash the password before saving it to the database
-    const hashedPassword = bycrpt.hashSync(password);
-
-    // 3. Create a new user record with the provided username and hashed password
-    const createdUser = await User.create({
-      username: username,
-      password: hashedPassword,
+        // Notify others of user online status
+        const user = await User.findById(userId, 'username');
+        const username = user ? user.username : 'Unknown';
+        socket.broadcast.emit('user-online', { userId, username });
     });
 
-    // 4. Generate a JWT token for the newly created user
-    jwt.sign(
-      { userId: createdUser._id },  // Payload
-      jwtSecret,                    // Secret key for signing
-      {},                           // Additional options (none provided here)
-      (err, token) => {
-        // 5. Handle any error during token creation
-        if (err) throw err;
+    socket.on('call-request', ({ callId, calleeId, callerId, callerName }) => {
+        console.log(`Call request from ${callerId} to ${calleeId} with callId ${callId}`);
 
-        // 6. If token is successfully created, store it as an HTTP-only secure cookie
-        res.cookie('token', token, {
-          httpOnly: true,  // Prevents client-side JS access 
-          sameSite: 'none', // Allows cross-origin requests
-          secure: true,    // Ensures cookie is only sent over HTTPS
-        })
-        .status(201)       // HTTP status 201: Created
-        .json({
-          id: createdUser._id,
-          username,
+        // Validate inputs
+        if (!callId || !calleeId || !callerId) {
+            console.error('Invalid call request parameters:', { callId, calleeId, callerId });
+            socket.emit('call-failed', {
+                reason: 'invalid-parameters',
+                message: 'Invalid call parameters'
+            });
+            return;
+        }
+
+        if (callerId === calleeId) {
+            console.log('Self-call detected');
+            socket.emit('call-failed', {
+                reason: 'self-call',
+                message: 'You cannot call yourself'
+            });
+            return;
+        }
+
+        // Check if callee is online
+        const calleeSocketIds = activeUsers.get(calleeId);
+        console.log(`Callee ${calleeId} socket IDs:`, calleeSocketIds ? [...calleeSocketIds] : 'none');
+        if (!calleeSocketIds || calleeSocketIds.size === 0) {
+            console.log(`Callee ${calleeId} is offline`);
+            socket.emit('call-not-available', {
+                userId: calleeId,
+                reason: 'user-offline'
+            });
+            return;
+        }
+
+        // Check if callee is already in a call
+        for (const [existingCallId, call] of activeCalls) {
+            if (call.participants.includes(calleeId) && call.status === 'active') {
+                console.log(`Callee ${calleeId} is already in a call`);
+                socket.emit('call-not-available', {
+                    userId: calleeId,
+                    reason: 'user-busy'
+                });
+                return;
+            }
+        }
+
+        // Store call
+        activeCalls.set(callId, {
+            participants: [callerId, calleeId],
+            status: 'pending',
+            createdAt: Date.now()
         });
-      }
-    );
-  } catch (err) {
-    // 7. Catch any server/database error and return error response
-    console.error("Registration error:", err);
-    res.status(500).json("Error creating user");
-  }
+
+        // Notify callee
+        calleeSocketIds.forEach((socketId) => {
+            const calleeSocket = io.sockets.sockets.get(socketId);
+            if (calleeSocket) {
+                console.log(`Emitting incoming-call to socket ${socketId}`);
+                calleeSocket.emit('incoming-call', {
+                    callId,
+                    callerId,
+                    callerName
+                });
+            } else {
+                console.warn(`Socket ${socketId} not found for callee ${calleeId}`);
+            }
+        });
+
+        // Notify caller that the call is ringing
+        socket.emit('call-ringing', { callId });
+    });
+
+    socket.on('call-accepted', ({ callId, calleeId, callerId }) => {
+        console.log(`Call ${callId} accepted by ${calleeId}`);
+        const call = activeCalls.get(callId);
+
+        if (!call) {
+            console.error(`Call ${callId} not found`);
+            socket.emit('call-failed', {
+                reason: 'call-not-found',
+                message: 'Call does not exist'
+            });
+            return;
+        }
+
+        if (call.status !== 'pending') {
+            console.error(`Call ${callId} is not in pending state`);
+            socket.emit('call-failed', {
+                reason: 'invalid-state',
+                message: 'Call is not pending'
+            });
+            return;
+        }
+
+        call.status = 'active';
+
+        const callerSocketIds = activeUsers.get(callerId);
+        if (callerSocketIds) {
+            callerSocketIds.forEach((socketId) => {
+                const callerSocket = io.sockets.sockets.get(socketId);
+                if (callerSocket) {
+                    console.log(`Emitting call-accepted to socket ${socketId}`);
+                    callerSocket.emit('call-accepted', {
+                        callId,
+                        calleeId
+                    });
+                }
+            });
+        } else {
+            console.warn(`No active sockets for caller ${callerId}`);
+        }
+    });
+
+    socket.on('call-rejected', ({ callId, calleeId, callerId }) => {
+        console.log(`Call ${callId} rejected by ${calleeId}`);
+        const call = activeCalls.get(callId);
+
+        if (!call) {
+            console.error(`Call ${callId} not found`);
+            return;
+        }
+
+        const callerSocketIds = activeUsers.get(callerId);
+        if (callerSocketIds) {
+            callerSocketIds.forEach((socketId) => {
+                const callerSocket = io.sockets.sockets.get(socketId);
+                if (callerSocket) {
+                    console.log(`Emitting call-rejected to socket ${socketId}`);
+                    callerSocket.emit('call-rejected', {
+                        callId,
+                        calleeId
+                    });
+                }
+            });
+        } else {
+            console.warn(`No active sockets for caller ${callerId}`);
+        }
+
+        activeCalls.delete(callId);
+    });
+
+    socket.on('disconnect', () => {
+        console.log(`Socket ${socket.id} disconnected`);
+        if (currentUserId) {
+            const userSockets = activeUsers.get(currentUserId);
+            if (userSockets) {
+                userSockets.delete(socket.id);
+                console.log(`Removed socket ${socket.id} for user ${currentUserId}. Remaining sockets:`, [...userSockets]);
+                if (userSockets.size === 0) {
+                    activeUsers.delete(currentUserId);
+                    console.log(`User ${currentUserId} is now offline`);
+                    socket.broadcast.emit('user-offline', { userId: currentUserId });
+
+                    // End any active calls for this user
+                    for (const [callId, call] of activeCalls) {
+                        if (call.participants.includes(currentUserId)) {
+                            const otherUserId = call.participants.find(id => id !== currentUserId);
+                            const otherSocketIds = activeUsers.get(otherUserId);
+                            if (otherSocketIds) {
+                                otherSocketIds.forEach((socketId) => {
+                                    const otherSocket = io.sockets.sockets.get(socketId);
+                                    if (otherSocket) {
+                                        console.log(`Emitting call-ended to socket ${socketId}`);
+                                        otherSocket.emit('call-ended', {
+                                            callId,
+                                            reason: 'user-disconnected'
+                                        });
+                                    }
+                                });
+                            }
+                            activeCalls.delete(callId);
+                        }
+                    }
+                }
+            }
+        }
+    });
 });
 
-// Start the HTTP server on port 4000
-const server = app.listen(4000);
-
-// Create WebSocket server on top of HTTP server
-const wss = new ws.WebSocketServer({server});
-
-// Function: notifyUserConnection
-// Description: Notifies all connected clients when a user connects or disconnects.
-function notifyUserConnection(userId, isOnline) {
-  // 1. Loop through all WebSocket clients
-  [...wss.clients].forEach(client => {
-    // 2. Send an online status update to each client
-    client.send(JSON.stringify({
-      online_status_change: {
-        userId: userId,
-        online: isOnline
-      }
-    }));
-  });
-}
-
-
-// Function: broadcastOnlineUsers
-// Description: Sends an updated list of online users to every connected client (excluding themselves).
-function broadcastOnlineUsers(wss) {
-  // 1. Loop through each client
-  [...wss.clients].forEach(client => {
-    // 2. Create a list of other online users (excluding the client)
-    const onlinePeopleForClient = [...wss.clients]
-      .filter(c => c.username && c.userId !== client.userId)
-      .map(c => ({ userId: c.userId, username: c.username }));
-
-    // 3. Send the online list and the client's own ID
-    client.send(JSON.stringify({
-      online: onlinePeopleForClient,
-      you: client.userId
-    }));
-  });
-}
-
-// Event: wss.on('connection')
-// Description: Handles a new WebSocket connection, including authentication, file handling, messaging, and disconnection.
-wss.on('connection', (connection, req) => {
-  // 1. Extract token from cookies in the WebSocket request header
-  const cookies = req.headers.cookie;
-  if (cookies) {
-    const tokenCookieString = cookies.split(';').find(str => str.startsWith('token='));
-    if (tokenCookieString) {
-      const token = tokenCookieString.split('=')[1];
-
-      if (token) {
-        // 2. Verify the token and extract user data
-        jwt.verify(token, jwtSecret, {}, (err, userData) => {
-          if (err) throw err;
-
-          // 3. Store user ID on connection object
-          const { userId } = userData;
-          connection.userId = userId;
-
-          // 4. Fetch user's username and notify others
-          User.findById(userId).then(user => {
-            if (user) {
-              connection.username = user.username;
-
-              // 5. Inform all users that someone has come online
-              broadcastOnlineUsers(wss);
-              notifyUserConnection(userId, true);
+// Periodic cleanup of stale calls
+setInterval(() => {
+    const now = Date.now();
+    for (const [callId, call] of activeCalls) {
+        if (call.status === 'pending' && now - call.createdAt > 30000) {
+            console.log(`Cleaning up stale call ${callId}`);
+            const [callerId, calleeId] = call.participants;
+            const callerSocketIds = activeUsers.get(callerId);
+            if (callerSocketIds) {
+                callerSocketIds.forEach((socketId) => {
+                    const callerSocket = io.sockets.sockets.get(socketId);
+                    if (callerSocket) {
+                        console.log(`Emitting call-failed to socket ${socketId}`);
+                        callerSocket.emit('call-failed', {
+                            reason: 'timeout',
+                            message: 'Call timed out'
+                        });
+                    }
+                });
             }
-          });
-        });
-      }
-    }
-  }
-
-  // 6. Create uploads directory if it doesn't exist
-  const uploadsDir = path.join(__dirname, 'uploads');
-  if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-  }
-
-   // 7. Listen for messages from client
-   connection.on('message', async (message) => {
-    const messageData = JSON.parse(message.toString());
-    const { recipient, text, file } = messageData;
-
-    let filename = null;
-
-  // 8. Process and save uploaded file, if present
-  // Purpose: Handles file uploads by extracting the file extension, generating a unique filename,
-  // converting base64 data to a buffer, and saving it to the uploads directory
-  if (file) {
-    try {
-      // Split filename to extract extension
-      const parts = file.name.split('.');
-      const ext = parts[parts.length - 1];
-      
-      // Generate unique filename using timestamp and original extension
-      filename = Date.now() + '.' + ext;
-      
-      // Define file path in uploads directory
-      const path = __dirname + '/uploads/' + filename;
-
-      // Convert base64 data to buffer, removing data URI prefix
-      const bufferData = Buffer.from(file.data.split(',')[1], 'base64');
-      
-      // Write file to disk asynchronously
-      fs.writeFile(path, bufferData, (err) => {
-        if (err) {
-          // Log error if file saving fails
-          console.error('Error saving file:', err);
-        } else {
-          // Log success message with file path
-          console.log('File saved:', path);
+            activeCalls.delete(callId);
         }
-      });
+    }
+}, 10000);
+
+// Get user data from JWT token
+async function getUserDataFromRequest(req) {
+    return new Promise((resolve, reject) => {
+        const token = req.cookies?.token;
+        console.log("Token from cookie:", token);
+        if (token) {
+            jwt.verify(token, jwtSecret, {}, (err, userData) => {
+                if (err) {
+                    console.error("JWT verification error:", err);
+                    return reject("Invalid token");
+                }
+                User.findById(userData.userId)
+                    .then(user => {
+                        if (!user) return reject("User not found");
+                        resolve(userData);
+                    })
+                    .catch((err) => reject(`Error finding user: ${err.message}`));
+            });
+        } else {
+            reject("No token found");
+        }
+    });
+}
+
+// Generate Stream tokens for Chat
+app.post('/api/token', async (req, res) => {
+    try {
+        const userData = await getUserDataFromRequest(req);
+        const user = await User.findById(userData.userId);
+        if (!user) return res.status(404).json({ error: "User not found" });
+
+        const chatToken = streamChatClient.createToken(user._id.toString());
+        const videoToken = streamChatClient.createToken(user._id.toString());
+
+        await streamChatClient.upsertUser({
+            id: user._id.toString(),
+            name: user.username,
+        });
+
+        res.json({ chatToken, videoToken });
     } catch (err) {
-      // Log any errors during file processing
-      console.error('File processing error:', err);
+        console.error("Token generation error:", err);
+        res.status(401).json({ error: err.message });
     }
-  }
+});
 
-    // 9. Save the message to MongoDB if there's content
-    if (recipient && (text || filename)) {
-      const messageDocument = await Message.create({
-        sender: connection.userId,
-        recipient,
-        text: text || '',
-        file: filename ? filename : null,
-      });
+// Get all users for contact list and sync with Stream
+app.get('/api/people', async (req, res) => {
+    try {
+        const userData = await getUserDataFromRequest(req);
+        const users = await User.find({ _id: { $ne: userData.userId } }, { '_id': 1, username: 1 });
 
-      // 10. Send the message to the recipient if they are online
-      [...wss.clients]
-        .filter(c => c.userId === recipient)
-        .forEach(c => c.send(JSON.stringify({
-          text,
-          sender: connection.userId,
-          recipient: recipient,
-          _id: messageDocument._id,
-          file: filename ? filename : null,
-        })));
+        const streamUsers = users.map(user => ({
+            id: user._id.toString(),
+            name: user.username,
+        }));
+        await streamChatClient.upsertUsers(streamUsers);
+
+        res.json(users);
+    } catch (err) {
+        console.error("People endpoint error:", err);
+        res.status(401).json({ error: err.message });
     }
-  });
+});
 
-  // Send initial online users list to newly connected client
-  connection.send(JSON.stringify({
-    online: [...wss.clients]
-      .filter(c => c.username && c.userId !== connection.userId)
-      .map(c => ({userId: c.userId, username: c.username})),
-    you: connection.userId
-  }));
-
-  // Handle client disconnection
-  connection.on('close', () => {
-    if (connection.userId) {
-      notifyUserConnection(connection.userId, false);
+// Profile endpoint
+app.get('/api/profile', async (req, res) => {
+    try {
+        console.log("Processing /api/profile request...");
+        const userData = await getUserDataFromRequest(req);
+        const user = await User.findById(userData.userId);
+        if (!user) return res.status(404).json({ error: "User not found" });
+        console.log("Profile data for user:", user);
+        res.json({
+            id: user._id,
+            username: user.username,
+        });
+    } catch (err) {
+        console.error("Profile endpoint error:", err);
+        res.status(401).json({ error: err.message });
     }
-    broadcastOnlineUsers(wss);
-  });
+});
+
+// Login endpoint
+app.post('/api/login', async (req, res) => {
+    const { username, password } = req.body;
+    console.log("Login attempt for username:", username);
+    if (!username || !password) {
+        console.log("Missing username or password");
+        return res.status(400).json({ error: "Username and password are required" });
+    }
+
+    try {
+        if (mongoose.connection.readyState !== 1) {
+            console.log("MongoDB not connected");
+            throw new Error("MongoDB is not connected");
+        }
+
+        console.log("Querying user...");
+        const foundUser = await User.findOne({ username });
+        if (!foundUser) {
+            console.log("User not found");
+            return res.status(404).json({ error: "User not found" });
+        }
+
+        console.log("Verifying password...");
+        const passOK = bcrypt.compareSync(password, foundUser.password);
+        if (!passOK) {
+            console.log("Incorrect password");
+            return res.status(401).json({ error: "Incorrect password" });
+        }
+
+        console.log("Generating Stream token...");
+        let chatToken;
+        try {
+            chatToken = streamChatClient.createToken(foundUser._id.toString());
+            console.log("Token generated:", { chatToken });
+        } catch (err) {
+            console.log("Token generation failed:", err.message);
+            throw new Error(`Failed to generate Stream token: ${err.message}`);
+        }
+
+        console.log("Generating JWT...");
+        jwt.sign(
+            { userId: foundUser._id },
+            jwtSecret,
+            {},
+            (err, token) => {
+                if (err) {
+                    console.log("JWT generation failed:", err.message);
+                    throw new Error(`Failed to generate JWT: ${err.message}`);
+                }
+                const cookieOptions = {
+                    httpOnly: true,
+                    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+                    secure: process.env.NODE_ENV === 'production',
+                };
+                console.log("Setting cookie with options:", cookieOptions);
+                console.log("Setting cookie and sending response...");
+                res.cookie('token', token, cookieOptions).status(200).json({
+                    id: foundUser._id,
+                    username: foundUser.username,
+                    chatToken
+                });
+            }
+        );
+    } catch (err) {
+        console.error("Login error:", err.message, err.stack);
+        res.status(500).json({ error: `Server error during login: ${err.message}` });
+    }
+});
+
+// Logout endpoint
+app.post('/api/logout', (req, res) => {
+    const cookieOptions = {
+        httpOnly: true,
+        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+        secure: process.env.NODE_ENV === 'production',
+    };
+    console.log("Clearing cookie with options:", cookieOptions);
+    res.cookie('token', '', cookieOptions).json('ok');
+});
+
+// Register endpoint
+app.post('/api/register', async (req, res) => {
+    const { username, password } = req.body;
+    if (!username || !password) {
+        return res.status(400).json({ error: "Username and password are required" });
+    }
+
+    try {
+        const existingUser = await User.findOne({ username });
+        if (existingUser) {
+            return res.status(400).json({ error: "Username already exists" });
+        }
+
+        const hashedPassword = bcrypt.hashSync(password, bcryptSalt);
+        const createdUser = await User.create({
+            username: username,
+            password: hashedPassword,
+        });
+
+        await streamChatClient.upsertUser({
+            id: createdUser._id.toString(),
+            name: createdUser.username,
+        });
+
+        const chatToken = streamChatClient.createToken(createdUser._id.toString());
+
+        jwt.sign(
+            { userId: createdUser._id },
+            jwtSecret,
+            {},
+            (err, token) => {
+                if (err) {
+                    console.error("JWT signing error:", err);
+                    return res.status(500).json({ error: "Failed to generate token" });
+                }
+                const cookieOptions = {
+                    httpOnly: true,
+                    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+                    secure: process.env.NODE_ENV === 'production',
+                };
+                console.log("Setting cookie with options:", cookieOptions);
+                res.cookie('token', token, cookieOptions).status(201).json({
+                    id: createdUser._id,
+                    username,
+                    chatToken
+                });
+            }
+        );
+    } catch (err) {
+        console.error("Registration error:", err);
+        res.status(500).json({ error: "Error creating user" });
+    }
+});
+
+server.listen(4000, () => {
+    console.log(`Server running on port 4000`);
 });
