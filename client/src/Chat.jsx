@@ -3,7 +3,6 @@ import axios from "axios";
 import {
     Chat,
     Channel,
-    ChannelList,
     Window,
     ChannelHeader,
     MessageList,
@@ -13,7 +12,7 @@ import {
 import { StreamChat } from "stream-chat";
 import { useNavigate } from "react-router-dom";
 import Avatar from "./Avatar";
-import Logo from "./Logo";
+import Logo from "./logo";
 import Contact from "./Contact";
 import { LogOut, Video } from "lucide-react";
 import "stream-chat-react/dist/css/v2/index.css";
@@ -31,6 +30,7 @@ export default function ChatComponent() {
     const [error, setError] = useState("");
     const [callStatus, setCallStatus] = useState("idle");
     const [incomingCall, setIncomingCall] = useState(null);
+    const [activeChannel, setActiveChannel] = useState(null);
     const socketRef = useRef(null);
     const navigate = useNavigate();
 
@@ -179,7 +179,6 @@ export default function ChatComponent() {
                             timestamp: Date.now()
                         });
                         setCallStatus("incoming");
-
                     });
 
                     socketInstance.on('call-ringing', ({ callId }) => {
@@ -383,6 +382,34 @@ export default function ChatComponent() {
         setIncomingCall(null);
     };
 
+    const handleContactClick = (userId) => {
+        setSelectedUserId(userId);
+        if (chatClient) {
+            chatClient
+                .queryChannels({
+                    type: "messaging",
+                    members: { $eq: [myUserId.toString(), userId] },
+                })
+                .then((channels) => {
+                    if (channels.length > 0) {
+                        setActiveChannel(channels[0]); // Use the existing channel
+                    } else {
+                        // Create a new channel if it doesn't exist
+                        chatClient
+                            .channel("messaging", {
+                                members: [myUserId.toString(), userId],
+                            })
+                            .create()
+                            .then((channel) => {
+                                setActiveChannel(channel);
+                            })
+                            .catch((err) => console.error("Failed to create channel:", err));
+                    }
+                })
+                .catch((err) => console.error("Failed to query channels:", err));
+        }
+    };
+
     const CustomChannelHeader = () => {
         const handleVideoCall = async () => {
             if (!selectedUserId || !socket || !chatClient) {
@@ -437,7 +464,7 @@ export default function ChatComponent() {
         };
 
         return (
-            <div className="flex items-center justify-between p-4 border-b border-zinc-700">
+            <div className="flex items-center justify-between p-4 border-b border-gray-300 bg-white">
                 <ChannelHeader />
                 {selectedUserId && (
                     <button
@@ -445,8 +472,8 @@ export default function ChatComponent() {
                         disabled={callStatus !== "idle"}
                         className={`p-2 rounded-lg transition-colors ${
                             callStatus !== "idle" 
-                                ? "bg-zinc-600 text-zinc-300 cursor-not-allowed" 
-                                : "text-zinc-400 hover:bg-zinc-700 hover:text-white"
+                                ? "bg-gray-200 text-gray-500 cursor-not-allowed" 
+                                : "text-gray-600 hover:bg-gray-300 hover:text-black"
                         }`}
                         title={callStatus === "idle" ? "Start Video Call" : "Call in progress"}
                     >
@@ -460,15 +487,14 @@ export default function ChatComponent() {
         );
     };
 
-    // Call dialog component
     const IncomingCallDialog = () => {
         if (!incomingCall || callStatus !== "incoming") return null;
         
         return (
-            <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
-                <div className="bg-zinc-800 rounded-lg p-6 max-w-md w-full">
-                    <h3 className="text-xl font-medium text-white mb-4">Incoming Call</h3>
-                    <p className="text-zinc-300 mb-6">
+            <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50">
+                <div className="bg-white rounded-lg p-6 max-w-md w-full border border-gray-300">
+                    <h3 className="text-xl font-medium text-black mb-4">Incoming Call</h3>
+                    <p className="text-gray-700 mb-6">
                         {incomingCall.callerName} is calling you
                     </p>
                     <div className="flex justify-between">
@@ -490,16 +516,13 @@ export default function ChatComponent() {
         );
     };
 
-    const filters = { type: "messaging", members: { $in: [myUserId?.toString()] } };
-    const sort = [{ last_message_at: -1 }];
-
     if (!loggedIn || !chatClient) {
         return (
-            <div className="flex h-screen items-center justify-center bg-zinc-900">
+            <div className="flex h-screen items-center justify-center bg-white">
                 <div className="text-center">
-                    <h1 className="text-xl text-white mb-4 mt-8">You are logged out</h1>
-                    {error && <p className="text-red-400 mb-4">{error}</p>}
-                    <p className="text-zinc-400 mb-6">Please login to continue chatting</p>
+                    <h1 className="text-xl text-black mb-4 mt-8">You are logged out</h1>
+                    {error && <p className="text-red-600 mb-4">{error}</p>}
+                    <p className="text-gray-700 mb-6">Please login to continue chatting</p>
                     <a
                         href="/login"
                         className="bg-blue-500 text-white py-3 px-6 rounded-lg hover:bg-blue-600 transition-colors"
@@ -513,35 +536,19 @@ export default function ChatComponent() {
 
     return (
         <>
-            <Chat client={chatClient} theme="messaging dark">
-                <div className="flex h-screen w-full overflow-x-hidden">
-                    <div className="bg-zinc-900 border-r border-zinc-700 w-80 flex flex-col fixed top-0 left-0 h-full">
+            <Chat client={chatClient} theme="messaging light">
+                <div className="flex h-screen w-full overflow-x-hidden bg-white">
+                    <div className="bg-white border-r border-gray-300 w-80 flex flex-col fixed top-0 left-0 h-full">
                         <div className="flex-grow overflow-y-auto scrollbar-hidden">
                             <Logo />
-                            <div className="border-b mx-3 border-zinc-700" />
+                            <div className="border-b mx-3 border-gray-300" />
                             {Object.keys(onlinePeople).map((userId) => (
                                 <Contact
                                     key={userId}
                                     id={userId}
                                     username={onlinePeople[userId]}
                                     online={true}
-                                    onClick={() => {
-                                        setSelectedUserId(userId);
-                                        chatClient
-                                            .queryChannels({
-                                                type: "messaging",
-                                                members: { $eq: [myUserId.toString(), userId] },
-                                            })
-                                            .then((channels) => {
-                                                if (channels.length === 0) {
-                                                    chatClient
-                                                        .channel("messaging", {
-                                                            members: [myUserId.toString(), userId],
-                                                        })
-                                                        .create();
-                                                }
-                                            });
-                                    }}
+                                    onClick={() => handleContactClick(userId)}
                                     selected={userId === selectedUserId}
                                 />
                             ))}
@@ -551,29 +558,13 @@ export default function ChatComponent() {
                                     id={userId}
                                     username={offlinePeople[userId].username}
                                     online={false}
-                                    onClick={() => {
-                                        setSelectedUserId(userId);
-                                        chatClient
-                                            .queryChannels({
-                                                type: "messaging",
-                                                members: { $eq: [myUserId.toString(), userId] },
-                                            })
-                                            .then((channels) => {
-                                                if (channels.length === 0) {
-                                                    chatClient
-                                                        .channel("messaging", {
-                                                            members: [myUserId.toString(), userId],
-                                                        })
-                                                        .create();
-                                                }
-                                            });
-                                    }}
+                                    onClick={() => handleContactClick(userId)}
                                     selected={userId === selectedUserId}
                                 />
                             ))}
                         </div>
-                        <div className="flex items-center justify-between bg-zinc-800 rounded-lg m-4 p-4">
-                            <span className="flex items-center text-sm text-zinc-400">
+                        <div className="flex items-center justify-between bg-gray-100 rounded-lg m-4 p-4 border border-gray-300">
+                            <span className="flex items-center text-sm text-gray-700">
                                 <Avatar userId={myUserId} username={username} className="flex-shrink-0 w-8 h-8 mr-2" />
                                 <div className="mr-4"></div>
                                 {username}
@@ -581,27 +572,15 @@ export default function ChatComponent() {
                             <div className="flex items-center gap-2">
                                 <button
                                     onClick={logout}
-                                    className="text-zinc-400 p-2 rounded-lg hover:bg-zinc-700 hover:text-white transition-colors"
+                                    className="text-gray-700 p-2 rounded-lg hover:bg-gray-300 hover:text-black transition-colors"
                                 >
                                     <LogOut className="w-5 h-5" />
                                 </button>
                             </div>
                         </div>
                     </div>
-                    <div className="flex flex-col bg-zinc-900 flex-1 ml-80 p-6 overflow-x-hidden">
-                        <ChannelList
-                            filters={filters}
-                            sort={sort}
-                            showChannelSearch={false}
-                            additionalChannelListProps={{
-                                onChannelSelect: (channel) => {
-                                    const members = Object.keys(channel.state.members);
-                                    const otherMember = members.find((m) => m !== myUserId.toString());
-                                    setSelectedUserId(otherMember || null);
-                                },
-                            }}
-                        />
-                        <Channel>
+                    <div className="flex flex-col bg-white flex-1 ml-80 p-6 overflow-x-hidden">
+                        <Channel channel={activeChannel}>
                             <Window>
                                 <CustomChannelHeader />
                                 <MessageList />

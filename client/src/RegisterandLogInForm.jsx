@@ -36,7 +36,7 @@ export default function RegisterandLogInForm() {
     }
 
     return (
-        <div className="bg-zinc-900 h-screen flex items-center justify-center">
+        <div className="bg-white h-screen flex items-center justify-center">
             <div className="w-80 mx-auto text-center">
                 <Logo />
                 <form className="mt-8" onSubmit={handleSubmit}>
@@ -45,27 +45,27 @@ export default function RegisterandLogInForm() {
                         onChange={(ev) => setUsername(ev.target.value)}
                         type="text"
                         placeholder="Username"
-                        className="block w-full rounded-lg p-4 mb-4 bg-zinc-800 text-white border-2 border-zinc-600 placeholder-zinc-400 focus:outline-none focus:border-zinc-500"
+                        className="block w-full rounded-lg p-4 mb-4 bg-gray-100 text-black border-2 border-gray-300 placeholder-gray-500 focus:outline-none focus:border-gray-400"
                     />
                     <input
                         value={password}
                         onChange={(ev) => setPassword(ev.target.value)}
                         type="password"
                         placeholder="Password"
-                        className="block w-full rounded-lg p-4 mb-4 bg-zinc-800 text-white border-2 border-zinc-600 placeholder-zinc-400 focus:outline-none focus:border-zinc-500"
+                        className="block w-full rounded-lg p-4 mb-4 bg-gray-100 text-black border-2 border-gray-300 placeholder-gray-500 focus:outline-none focus:border-gray-400"
                     />
                     {error && (
-                        <div className="text-red-400 text-sm mb-4">{error}</div>
+                        <div className="text-red-600 text-sm mb-4">{error}</div>
                     )}
                     <button className="bg-blue-500 text-white w-full rounded-lg p-4 hover:bg-blue-600 transition-colors">
                         {isLoginOrRegister === "register" ? "Register" : "Login"}
                     </button>
-                    <div className="text-zinc-400 mt-4">
+                    <div className="text-gray-700 mt-4">
                         {isLoginOrRegister === "register" ? "Already a member?" : "Need an account?"}
                         <button
                             type="button"
                             onClick={() => setIsLoginOrRegister(isLoginOrRegister === "register" ? "login" : "register")}
-                            className="text-blue-300 hover:text-blue-400 underline ml-2"
+                            className="text-blue-600 hover:text-blue-700 underline ml-2"
                         >
                             {isLoginOrRegister === "register" ? "Login here" : "Register here"}
                         </button>

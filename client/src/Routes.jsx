@@ -9,18 +9,20 @@ export default function RoutesComponent() {
     const { username } = useContext(UserContext);
 
     return (
-        <Routes>
-            {username ? (
-                <>
-                    <Route path="/" element={<Chat />} />
-                    <Route path="/call/:callId" element={<Call />} />
-                </>
-            ) : (
-                <>
-                    <Route path="/" element={<RegisterandLogInForm />} />
-                    <Route path="/login" element={<RegisterandLogInForm />} />
-                </>
-            )}
-        </Routes>
+        <div className="font-inter">
+            <Routes>
+                {username ? (
+                    <>
+                        <Route path="/" element={<Chat />} />
+                        <Route path="/call/:callId" element={<Call />} />
+                    </>
+                ) : (
+                    <>
+                        <Route path="/" element={<RegisterandLogInForm />} />
+                        <Route path="/login" element={<RegisterandLogInForm />} />
+                    </>
+                )}
+            </Routes>
+        </div>
     );
 }
