@@ -359,6 +359,14 @@ This modular organization separates concerns, making the codebase more maintaina
 
 See other pages for the complete code explenation 
 
+[5.1 Chat Application](https://www.notion.so/5-1-Chat-Application-1f56c7c937d280f4afb1ef7649463fa3?pvs=21)
+
+[5.2 Index.js](https://www.notion.so/5-2-Index-js-1f56c7c937d2802ca182cff42f3cc797?pvs=21)
+
+[5.3 Chat.jsx](https://www.notion.so/5-3-Chat-jsx-1f56c7c937d280388c76edf9dc6e234d?pvs=21)
+
+[5.4 Video Call (Call.jsx & CallPage.jsx)](https://www.notion.so/5-4-Video-Call-Call-jsx-CallPage-jsx-1f56c7c937d280a7a41eeb59924702a4?pvs=21)
+
 ### Code Summary
 
 The frontend is a dynamic React application built with Stream Chat and Socket.IO, providing a real-time chat and video call interface. It handles:
@@ -489,11 +497,3 @@ Currently, a user can only stay logged in on one device at a time. Improving the
 **Video Call**
 
 ![image.png](attachment:08f252ed-3c54-4e56-b7bc-c9f665d171c0:image.png)
-
-[5.1 Chat Application](https://www.notion.so/5-1-Chat-Application-1f56c7c937d280f4afb1ef7649463fa3?pvs=21)
-
-[5.2 Index.js](https://www.notion.so/5-2-Index-js-1f56c7c937d2802ca182cff42f3cc797?pvs=21)
-
-[5.3 Chat.jsx](https://www.notion.so/5-3-Chat-jsx-1f56c7c937d280388c76edf9dc6e234d?pvs=21)
-
-[5.4 Video Call (Call.jsx & CallPage.jsx)](https://www.notion.so/5-4-Video-Call-Call-jsx-CallPage-jsx-1f56c7c937d280a7a41eeb59924702a4?pvs=21)
