@@ -73,11 +73,16 @@ io.on('connection', (socket) => {
 
   // Handle user registration
   socket.on('register', async (userId) => {
-    // Step 1: Log user registration attempt
+    // Step 1: Validate userId
+    if (!userId) {
+      console.error("Invalid userId during registration");
+      return;
+    }
+    // Step 2: Log user registration attempt
     console.log(`User ${userId} registering with socket ${socket.id}`);
     currentUserId = userId;
 
-    // Step 2: Clean up old sockets for this user to prevent multiple connections
+    // Step 3: Clean up old sockets for this user to prevent multiple connections
     if (activeUsers.has(userId)) {
       const oldSockets = activeUsers.get(userId);
       oldSockets.forEach((socketId) => {
@@ -91,27 +96,28 @@ io.on('connection', (socket) => {
       });
     }
 
-    // Step 3: Store new socket connection
+    // Step 4: Store new socket connection
     if (!activeUsers.has(userId)) {
       activeUsers.set(userId, new Set());
     }
     activeUsers.get(userId).add(socket.id);
     console.log(`Active sockets for user ${userId}:`, [...activeUsers.get(userId)]);
 
-    // Step 4: Verify socket is still active
+    // Step 5: Verify socket is still active
     if (!io.sockets.sockets.get(socket.id)) {
       console.error(`Socket ${socket.id} is not active after registration for user ${userId}`);
     }
 
-    // Step 5: Notify other clients that this user is online
+    // Step 6: Notify other clients that this user is online
     const user = await User.findById(userId, 'username');
     const username = user ? user.username : 'Unknown';
     socket.broadcast.emit('user-online', { userId, username });
   });
 
   // Handle call request from a caller to a callee
-  socket.on('call-request', ({ callId, calleeId, callerId, callerName }) => {
+  socket.on('call-request', async ({ callId, calleeId, callerId, callerName }) => {
     console.log(`Call request from ${callerId} to ${calleeId} with callId ${callId}`);
+    console.log("Active users:", [...activeUsers.entries()].map(([userId, sockets]) => ({ userId, sockets: [...sockets] })));
 
     // Step 1: Validate input parameters
     if (!callId || !calleeId || !callerId) {
@@ -134,13 +140,25 @@ io.on('connection', (socket) => {
     }
 
     // Step 3: Check if callee is online
-    const calleeSocketIds = activeUsers.get(calleeId);
+    let calleeSocketIds = activeUsers.get(calleeId);
     console.log(`Callee ${calleeId} socket IDs:`, calleeSocketIds ? [...calleeSocketIds] : 'none');
     if (!calleeSocketIds || calleeSocketIds.size === 0) {
-      console.log(`Callee ${calleeId} is offline`);
+      // Fallback: Check Stream Chat presence
+      console.log(`Callee ${calleeId} not in activeUsers, checking Stream Chat presence`);
+      const users = await streamChatClient.queryUsers({ id: calleeId });
+      if (users.users.length === 0 || !users.users[0].online) {
+        console.log(`Callee ${calleeId} is offline in Stream Chat`);
+        socket.emit('call-not-available', {
+          userId: calleeId,
+          reason: 'user-offline'
+        });
+        return;
+      }
+      // If Stream Chat says user is online but no socket, log for debugging
+      console.warn(`Callee ${calleeId} is online in Stream Chat but no Socket.IO connection`);
       socket.emit('call-not-available', {
         userId: calleeId,
-        reason: 'user-offline'
+        reason: 'no-socket-connection'
       });
       return;
     }
@@ -270,7 +288,7 @@ io.on('connection', (socket) => {
 
   // Handle socket disconnection
   socket.on('disconnect', (reason) => {
-    console.log(`Socket ${socket.id} disconnected, reason: ${reason}`);
+    console.log(`Socket ${socket.id} disconnected for user ${currentUserId}, reason: ${reason}`);
     if (currentUserId) {
       const userSockets = activeUsers.get(currentUserId);
       if (userSockets) {
@@ -307,7 +325,7 @@ io.on('connection', (socket) => {
               }
             }
           }
-        }, 2000); // 2-second grace period for reconnection
+        }, 5000); // Increased to 5 seconds for better reconnection handling
       }
     }
   });

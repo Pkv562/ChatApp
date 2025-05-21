@@ -48,6 +48,7 @@ export default function ChatComponent() {
     // Async function to initialize all dependencies
     // Why: Centralizes setup logic to ensure user authentication, chat, and real-time features are ready before rendering.
     async function initialize() {
+      let initialOnlinePeople = {}; // Define at function scope to avoid undefined error
       try {
         console.log("Initializing Chat.jsx...");
 
@@ -128,7 +129,7 @@ export default function ChatComponent() {
             { id: { $ne: profileRes.data.id } }, // Exclude the current user
             { last_active: -1 } // Sort by most recently active
           );
-          const initialOnlinePeople = users.users
+          initialOnlinePeople = users.users
             .filter((user) => user.online)
             .reduce((acc, user) => {
               acc[user.id] = user.name || "";
@@ -149,11 +150,12 @@ export default function ChatComponent() {
           console.log("Initializing Socket.IO...");
           const socketInstance = io(import.meta.env.VITE_SERVER_URL || "http://localhost:4000", {
             withCredentials: true, // Enable cookies for authentication
-            transports: ["websocket"], // Use WebSocket for faster communication
+            transports: ["websocket", "polling"], // Fallback to polling if WebSocket fails
             reconnection: true, // Automatically reconnect on failure
-            reconnectionAttempts: 5, // Limit reconnection attempts
+            reconnectionAttempts: 10, // Increased attempts for reliability
             reconnectionDelay: 1000, // Initial delay between attempts
             reconnectionDelayMax: 5000, // Maximum delay
+            randomizationFactor: 0.5, // Randomize delay for better reconnection
           });
           socketRef.current = socketInstance;
 
@@ -161,7 +163,13 @@ export default function ChatComponent() {
           // Each listener handles a specific real-time event, updating state or triggering UI changes
           socketInstance.on("connect", () => {
             // Register user with Socket.IO server upon connection
-            console.log("Socket.IO connected, registering user:", profileRes.data.id);
+            console.log("Socket.IO connected, socket ID:", socketInstance.id);
+            socketInstance.emit("register", profileRes.data.id);
+          });
+
+          socketInstance.on("reconnect", () => {
+            // Re-register user on reconnection to ensure presence
+            console.log("Socket.IO reconnected, re-registering user:", profileRes.data.id);
             socketInstance.emit("register", profileRes.data.id);
           });
 
@@ -173,6 +181,7 @@ export default function ChatComponent() {
             }
           });
 
+          // Use Socket.IO for online/offline status to ensure consistency with video call signaling
           socketInstance.on("user-online", ({ userId, username }) => {
             // Update online status when a user connects
             console.log(`User online: ${userId} (${username})`);
@@ -309,36 +318,8 @@ export default function ChatComponent() {
           throw new Error(`Failed to initialize Socket.IO: ${err.message || JSON.stringify(err)}`);
         }
 
-        // Step 5: Set up Stream Chat event listeners
-        // Purpose: Monitor user presence changes to update online/offline status in real-time.
-        // Why: Enhances user experience by showing which contacts are available for messaging or calls.
-        console.log("Setting up Stream Chat event listeners...");
-        chatClient.on("user.presence.changed", (event) => {
-          const user = event.user;
-          if (user && user.id !== myUserId) {
-            // Update online/offline state based on user presence
-            if (isMounted) {
-              setOnlinePeople((prev) => {
-                if (user.online) {
-                  return { ...prev, [user.id]: user.name || "" };
-                } else {
-                  const newOnline = { ...prev };
-                  delete newOnline[user.id];
-                  return newOnline;
-                }
-              });
-              setOfflinePeople((prev) => {
-                if (!user.online) {
-                  return { ...prev, [user.id]: { username: user.name || "" } };
-                } else {
-                  const newOffline = { ...prev };
-                  delete newOffline[user.id];
-                  return newOffline;
-                }
-              });
-            }
-          }
-        });
+        // Step 5: Log initial online/offline state for debugging
+        console.log("Initial online people:", initialOnlinePeople);
       } catch (err) {
         // Centralized error handling for initialization failures
         console.error("Initialization failed:", err);
@@ -398,6 +379,7 @@ export default function ChatComponent() {
             return acc;
           }, {});
           setOfflinePeople(offlinePeople);
+          console.log("Offline people:", offlinePeople); // Log for debugging
         })
         .catch((err) => {
           console.error("Failed to fetch people:", err);
