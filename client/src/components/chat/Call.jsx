@@ -53,7 +53,7 @@ export default function Call() {
   // State for error messages
   const [error, setError] = useState('');
   // State for loading status
-  const [loading, setLoading] = useState.writelinesLoading(true);
+  const [loading, setLoading] = useState(true); // Corrected from useState.writelinesLoading
   // State for showing participant list
   const [showParticipants, setShowParticipants] = useState(false);
   // State for call initialization status
@@ -469,9 +469,7 @@ function AudioToggleButton() {
   return (
     <button
       onClick={toggleAudio}
-      className={`text-white p-3 rounded-full hover:bg-zinc-700 flex items-center justify-center transition-colors ${
-        isMute ? 'bg-red-500' : 'bg-zinc-600'
-      }`}
+      className={`text-white p-3 rounded-full hover:bg-zinc-700 flex items-center justify-center transition-colors ${isMute ? 'bg-red-500' : 'bg-zinc-600'}`}
       title={isMute ? 'Unmute' : 'Mute'}
       aria-label={isMute ? 'Unmute' : 'Mute'}
     >
@@ -506,9 +504,7 @@ function VideoToggleButton() {
   return (
     <button
       onClick={toggleVideo}
-      className={`text-white p-3 rounded-full hover:bg-zinc-700 flex items-center justify-center transition-colors ${
-        isMute ? 'bg-red-500' : 'bg-zinc-600'
-      }`}
+      className={`text-white p-3 rounded-full hover:bg-zinc-700 flex items-center justify-center transition-colors ${isMute ? 'bg-red-500' : 'bg-zinc-600'}`}
       title={isMute ? 'Turn on video' : 'Turn off video'}
       aria-label={isMute ? 'Turn on video' : 'Turn off video'}
     >

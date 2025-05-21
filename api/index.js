@@ -22,7 +22,7 @@ dotenv.config();
 // Connect to MongoDB database
 // Uses the MONGO_URL from environment variables to establish a connection
 mongoose.connect(process.env.MONGO_URL)
-  .then(() => console.log("Connected to MongoDB10:36 PM PST on Friday, May 16, 2025"))
+  .then(() => console.log("Connected to MongoDB"))
   .catch((err) => console.error("Failed to connect to MongoDB", err));
 
 // Initialize Stream Chat client
@@ -269,8 +269,8 @@ io.on('connection', (socket) => {
   });
 
   // Handle socket disconnection
-  socket.on('disconnect', () => {
-    console.log(`Socket ${socket.id} disconnected`);
+  socket.on('disconnect', (reason) => {
+    console.log(`Socket ${socket.id} disconnected, reason: ${reason}`);
     if (currentUserId) {
       const userSockets = activeUsers.get(currentUserId);
       if (userSockets) {

@@ -26,7 +26,7 @@ export default function ChatComponent() {
   // State variables for managing component behavior
   // Each state is critical for tracking specific aspects of the chat and call functionality
   const [chatClient, setChatClient] = useState(null); // Holds the Stream Chat client instance for messaging
-  const [socket, setSocket] = useState(null); // Holds the Socket.IO client instance for real-time events
+  const socketRef = useRef(null); // Holds the Socket.IO client instance for real-time events
   const [myUserId, setMyUserId] = useState(null); // Stores the current user's ID from the backend
   const [username, setUsername] = useState(null); // Stores the current user's username for display
   const [loggedIn, setLoggedIn] = useState(false); // Tracks whether the user is authenticated
@@ -37,15 +37,13 @@ export default function ChatComponent() {
   const [callStatus, setCallStatus] = useState("idle"); // Tracks video call state (idle, incoming, calling, ringing, accepted)
   const [incomingCall, setIncomingCall] = useState(null); // Stores details of an incoming call (callId, callerId, callerName, timestamp)
   const [activeChannel, setActiveChannel] = useState(null); // Holds the currently active Stream Chat channel
-  const socketRef = useRef(null); // Mutable reference to Socket.IO instance to persist across renders
   const navigate = useNavigate(); // React Router hook for programmatic navigation
 
   // Primary initialization effect: Sets up the entire chat and video call infrastructure
   // Complexity: This effect orchestrates multiple asynchronous operations (profile fetch, token fetch, Stream Chat setup,
   // Socket.IO setup) and handles real-time event listeners. It’s critical for bootstrapping the component.
   useEffect(() => {
-    let cleanupSocket = null; // Function to clean up Socket.IO listeners
-    let socketInstance = null; // Temporary Socket.IO instance
+    let isMounted = true;
 
     // Async function to initialize all dependencies
     // Why: Centralizes setup logic to ensure user authentication, chat, and real-time features are ready before rendering.
@@ -75,9 +73,11 @@ export default function ChatComponent() {
           throw new Error("Invalid profile data: id or username missing");
         }
         console.log("Profile data:", profileRes.data);
-        setMyUserId(profileRes.data.id);
-        setUsername(profileRes.data.username);
-        setLoggedIn(true);
+        if (isMounted) {
+          setMyUserId(profileRes.data.id);
+          setUsername(profileRes.data.username);
+          setLoggedIn(true);
+        }
 
         // Step 2: Fetch Stream Chat authentication token
         // Purpose: Obtain a token to authenticate the user with Stream Chat’s API.
@@ -118,7 +118,9 @@ export default function ChatComponent() {
             chatToken // Authentication token
           );
           console.log("Stream Chat connected");
-          setChatClient(chatClient);
+          if (isMounted) {
+            setChatClient(chatClient);
+          }
 
           // Fetch initial online users to populate the contact list
           // Why: Provides an immediate view of who is online, enhancing the user experience.
@@ -132,7 +134,9 @@ export default function ChatComponent() {
               acc[user.id] = user.name || "";
               return acc;
             }, {});
-          setOnlinePeople(initialOnlinePeople);
+          if (isMounted) {
+            setOnlinePeople(initialOnlinePeople);
+          }
         } catch (err) {
           throw new Error(`Failed to initialize Stream Chat: ${err.message || JSON.stringify(err)}`);
         }
@@ -143,7 +147,7 @@ export default function ChatComponent() {
         // Complexity: Managing multiple event listeners and ensuring reliable connection/reconnection logic.
         try {
           console.log("Initializing Socket.IO...");
-          socketInstance = io(import.meta.env.VITE_SERVER_URL || "http://localhost:4000", {
+          const socketInstance = io(import.meta.env.VITE_SERVER_URL || "http://localhost:4000", {
             withCredentials: true, // Enable cookies for authentication
             transports: ["websocket"], // Use WebSocket for faster communication
             reconnection: true, // Automatically reconnect on failure
@@ -151,8 +155,7 @@ export default function ChatComponent() {
             reconnectionDelay: 1000, // Initial delay between attempts
             reconnectionDelayMax: 5000, // Maximum delay
           });
-          setSocket(socketInstance);
-          socketRef.current = socketInstance; // Store in ref for access in other functions
+          socketRef.current = socketInstance;
 
           // Socket.IO event listeners
           // Each listener handles a specific real-time event, updating state or triggering UI changes
@@ -165,35 +168,41 @@ export default function ChatComponent() {
           socketInstance.on("connect_error", (err) => {
             // Handle connection failures, informing the user
             console.error("Socket.IO connection error:", err.message);
-            setError(`Socket.IO connection failed: ${err.message}`);
+            if (isMounted) {
+              setError(`Socket.IO connection failed: ${err.message}`);
+            }
           });
 
           socketInstance.on("user-online", ({ userId, username }) => {
             // Update online status when a user connects
             console.log(`User online: ${userId} (${username})`);
-            setOnlinePeople((prev) => ({
-              ...prev,
-              [userId]: username,
-            }));
-            setOfflinePeople((prev) => {
-              const newOffline = { ...prev };
-              delete newOffline[userId]; // Remove from offline list
-              return newOffline;
-            });
+            if (isMounted) {
+              setOnlinePeople((prev) => ({
+                ...prev,
+                [userId]: username,
+              }));
+              setOfflinePeople((prev) => {
+                const newOffline = { ...prev };
+                delete newOffline[userId]; // Remove from offline list
+                return newOffline;
+              });
+            }
           });
 
           socketInstance.on("user-offline", ({ userId }) => {
             // Update offline status when a user disconnects
             console.log(`User offline: ${userId}`);
-            setOnlinePeople((prev) => {
-              const newOnline = { ...prev };
-              delete newOnline[userId]; // Remove from online list
-              return newOnline;
-            });
-            setOfflinePeople((prev) => ({
-              ...prev,
-              [userId]: prev[userId] || { username: "Unknown" }, // Add to offline list
-            }));
+            if (isMounted) {
+              setOnlinePeople((prev) => {
+                const newOnline = { ...prev };
+                delete newOnline[userId]; // Remove from online list
+                return newOnline;
+              });
+              setOfflinePeople((prev) => ({
+                ...prev,
+                [userId]: prev[userId] || { username: "Unknown" }, // Add to offline list
+              }));
+            }
           });
 
           socketInstance.on("incoming-call", ({ callId, callerId, callerName }) => {
@@ -204,100 +213,98 @@ export default function ChatComponent() {
               console.warn("Caller name is missing, using default");
               callerName = "Unknown"; // Fallback for missing data
             }
-            setIncomingCall({
-              callId,
-              callerId,
-              callerName,
-              timestamp: Date.now(), // Track call initiation time
-            });
-            setCallStatus("incoming"); // Trigger UI to show call dialog
+            if (isMounted) {
+              setIncomingCall({
+                callId,
+                callerId,
+                callerName,
+                timestamp: Date.now(), // Track call initiation time
+              });
+              setCallStatus("incoming"); // Trigger UI to show call dialog
+            }
           });
 
           socketInstance.on("call-ringing", ({ callId }) => {
             // Indicate that the recipient’s device is ringing
             console.log(`Call ${callId} is ringing`);
-            setCallStatus("ringing");
+            if (isMounted) {
+              setCallStatus("ringing");
+            }
           });
 
           socketInstance.on("call-accepted", ({ callId, calleeId }) => {
             // Handle call acceptance by the recipient
             // Why: Navigates the caller to the video call page with necessary state.
             console.log("Call accepted by:", calleeId, "callId:", callId);
-            setCallStatus("accepted");
-            const recipientUsername = onlinePeople[calleeId] || offlinePeople[calleeId]?.username || "Unknown";
-            console.log("Navigating to call page:", `/call/${callId}`, "with state:", {
-              callId,
-              recipientId: calleeId,
-              recipientUsername,
-              initiator: true,
-            });
-            try {
-              navigate(`/call/${callId}`, {
-                state: {
-                  callId,
-                  recipientId: calleeId,
-                  recipientUsername,
-                  initiator: true, // Indicates user initiated the call
-                },
-                replace: true, // Replace history to prevent back navigation issues
+            if (isMounted) {
+              setCallStatus("accepted");
+              const recipientUsername = onlinePeople[calleeId] || offlinePeople[calleeId]?.username || "Unknown";
+              console.log("Navigating to call page:", `/call/${callId}`, "with state:", {
+                callId,
+                recipientId: calleeId,
+                recipientUsername,
+                initiator: true,
+                userId: myUserId,
               });
-            } catch (err) {
-              console.error("Navigation error:", err);
-              setCallStatus("idle");
-              alert("Failed to join call: Navigation error");
+              try {
+                navigate(`/call/${callId}`, {
+                  state: {
+                    callId,
+                    recipientId: calleeId,
+                    recipientUsername,
+                    initiator: true,
+                    userId: myUserId,
+                  },
+                  replace: true, // Replace history to prevent back navigation issues
+                });
+              } catch (err) {
+                console.error("Navigation error:", err);
+                setCallStatus("idle");
+                alert("Failed to join call: Navigation error");
+              }
             }
           });
 
           socketInstance.on("call-rejected", ({ callId, calleeId }) => {
             // Handle call rejection by the recipient
             console.log(`Call ${callId} rejected by ${calleeId}`);
-            setCallStatus("idle");
-            alert("Call was rejected by the recipient");
+            if (isMounted) {
+              setCallStatus("idle");
+              alert("Call was rejected by the recipient");
+            }
           });
 
           socketInstance.on("call-failed", ({ reason, message }) => {
             // Handle generic call failures
             console.log("Call failed:", { reason, message });
-            setCallStatus("idle");
-            alert(`Call failed: ${message}`);
+            if (isMounted) {
+              setCallStatus("idle");
+              alert(`Call failed: ${message}`);
+            }
           });
 
           socketInstance.on("call-not-available", ({ userId, reason }) => {
             // Handle cases where the recipient is unavailable
             console.log(`User ${userId} not available: ${reason}`);
-            setCallStatus("idle");
-            alert(`Call failed: User is not available (${reason})`);
+            if (isMounted) {
+              setCallStatus("idle");
+              alert(`Call failed: User is not available (${reason})`);
+            }
           });
 
           socketInstance.on("call-ended", ({ callId, reason }) => {
             // Handle call termination
             // Why: Ensures the UI and state are reset, and the user is navigated appropriately.
             console.log(`Call ${callId} ended, reason: ${reason || "unknown"}`);
-            setCallStatus("idle");
-            const currentPath = window.location.pathname;
-            if (!currentPath.startsWith(`/call/${callId}`)) {
-              navigate("/chat"); // Redirect to chat if not on call page
+            if (isMounted) {
+              setCallStatus("idle");
+              const currentPath = window.location.pathname;
+              if (!currentPath.startsWith(`/call/${callId}`)) {
+                navigate("/chat"); // Redirect to chat if not on call page
+              }
+              alert(`Call ended${reason === "user-disconnected" ? ": Other user disconnected" : ""}`);
             }
-            alert(`Call ended${reason === "user-disconnected" ? ": Other user disconnected" : ""}`);
           });
-
-          // Define cleanup function to remove listeners and disconnect
-          // Why: Prevents memory leaks and duplicate listeners on component unmount.
-          cleanupSocket = () => {
-            console.log("Cleaning up Socket.IO listeners");
-            socketInstance.off("connect");
-            socketInstance.off("connect_error");
-            socketInstance.off("user-online");
-            socketInstance.off("user-offline");
-            socketInstance.off("incoming-call");
-            socketInstance.off("call-ringing");
-            socketInstance.off("call-accepted");
-            socketInstance.off("call-rejected");
-            socketInstance.off("call-failed");
-            socketInstance.off("call-not-available");
-            socketInstance.off("call-ended");
-            socketInstance.disconnect();
-          };
         } catch (err) {
           throw new Error(`Failed to initialize Socket.IO: ${err.message || JSON.stringify(err)}`);
         }
@@ -310,34 +317,37 @@ export default function ChatComponent() {
           const user = event.user;
           if (user && user.id !== myUserId) {
             // Update online/offline state based on user presence
-            setOnlinePeople((prev) => {
-              if (user.online) {
-                return { ...prev, [user.id]: user.name || "" };
-              } else {
-                const newOnline = { ...prev };
-                delete newOnline[user.id];
-                return newOnline;
-              }
-            });
-            setOfflinePeople((prev) => {
-              if (!user.online) {
-                return { ...prev, [user.id]: { username: user.name || "" } };
-              } else {
-                const newOffline = { ...prev };
-                delete newOffline[user.id];
-                return newOffline;
-              }
-            });
+            if (isMounted) {
+              setOnlinePeople((prev) => {
+                if (user.online) {
+                  return { ...prev, [user.id]: user.name || "" };
+                } else {
+                  const newOnline = { ...prev };
+                  delete newOnline[user.id];
+                  return newOnline;
+                }
+              });
+              setOfflinePeople((prev) => {
+                if (!user.online) {
+                  return { ...prev, [user.id]: { username: user.name || "" } };
+                } else {
+                  const newOffline = { ...prev };
+                  delete newOffline[user.id];
+                  return newOffline;
+                }
+              });
+            }
           }
         });
       } catch (err) {
         // Centralized error handling for initialization failures
         console.error("Initialization failed:", err);
         console.error("Error details:", JSON.stringify(err, null, 2));
-        setError(`Failed to initialize: ${err.message || "Unknown error"}`);
-        setLoggedIn(false);
-        setChatClient(null);
-        setSocket(null);
+        if (isMounted) {
+          setError(`Failed to initialize: ${err.message || "Unknown error"}`);
+          setLoggedIn(false);
+          setChatClient(null);
+        }
       }
     }
 
@@ -346,14 +356,12 @@ export default function ChatComponent() {
     // Cleanup on component unmount
     // Why: Ensures resources are released and connections are closed to prevent memory leaks.
     return () => {
+      isMounted = false;
       if (chatClient) {
         chatClient.disconnectUser();
         console.log("Stream Chat disconnected");
       }
-      if (cleanupSocket) {
-        cleanupSocket();
-        console.log("Socket.IO disconnected");
-      }
+      // Do not disconnect socket to persist across navigation
     };
   }, []); // Empty dependency array ensures this runs only once on mount
 
@@ -405,7 +413,7 @@ export default function ChatComponent() {
       .post("/api/logout")
       .then(() => {
         if (chatClient) chatClient.disconnectUser();
-        if (socket) socket.disconnect();
+        if (socketRef.current) socketRef.current.disconnect();
         // Reset all state to initial values
         setMyUserId(null);
         setUsername(null);
@@ -414,7 +422,6 @@ export default function ChatComponent() {
         setOfflinePeople({});
         setLoggedIn(false);
         setChatClient(null);
-        setSocket(null);
         setCallStatus("idle");
         navigate("/"); // Redirect to home/login page
       })
@@ -442,7 +449,8 @@ export default function ChatComponent() {
         callId: incomingCall.callId,
         recipientId: incomingCall.callerId,
         recipientUsername: incomingCall.callerName,
-        initiator: false, // User is the callee, not the initiator
+        initiator: false,
+        userId: myUserId,
       },
     });
 
@@ -506,7 +514,7 @@ export default function ChatComponent() {
     // Complexity: Involves multiple validation checks, Socket.IO communication, and timeout handling.
     const handleVideoCall = async () => {
       // Validation checks to ensure call can proceed
-      if (!selectedUserId || !socket || !chatClient) {
+      if (!selectedUserId || !socketRef.current || !chatClient) {
         alert("Please select a contact and ensure clients are initialized.");
         return;
       }
@@ -531,7 +539,7 @@ export default function ChatComponent() {
         setCallStatus("calling");
 
         // Verify Socket.IO connection
-        if (!socket.connected) {
+        if (!socketRef.current.connected) {
           console.error("Socket is not connected");
           setCallStatus("idle");
           alert("Connection lost. Please try again.");
@@ -539,7 +547,7 @@ export default function ChatComponent() {
         }
 
         // Emit call request to server
-        socket.emit("call-request", {
+        socketRef.current.emit("call-request", {
           callId,
           calleeId: selectedUserId,
           callerId: myUserId,
@@ -550,7 +558,7 @@ export default function ChatComponent() {
         // Why: Prevents the caller from waiting indefinitely if the recipient doesn’t respond.
         const callTimeout = setTimeout(() => {
           if (callStatus === "calling" || callStatus === "ringing") {
-            socket.emit("call-rejected", {
+            socketRef.current.emit("call-rejected", {
               callId,
               calleeId: selectedUserId,
               callerId: myUserId,
